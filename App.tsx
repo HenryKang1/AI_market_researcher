@@ -1,15 +1,25 @@
-import React, { useState, useCallback } from 'react';
-import { Plus, Trash2, User, Play, FileText, BarChart2, CheckCircle, Loader2, ChevronRight, Download, Printer, FileSpreadsheet } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, User, Play, FileText, BarChart2, CheckCircle, Loader2, ChevronRight, Printer, FileSpreadsheet, Users, Save, Edit2, X, Check, FolderOpen, RotateCcw, Download, Calendar, LayoutList } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { StepIndicator } from './components/StepIndicator';
-import { Survey, Question, QuestionType, TargetPersonaDefinition, GeneratedPersona, SurveyResponse, Step, AnalysisResult } from './types';
+import { Survey, Question, QuestionType, TargetPersonaDefinition, GeneratedPersona, SurveyResponse, Step, AnalysisResult, SavedTemplate } from './types';
 import { generatePersonas, simulateSurveyResponse, analyzeResults } from './services/geminiService';
 
 const App: React.FC = () => {
   // --- State ---
+  const [activeTab, setActiveTab] = useState<'SURVEY' | 'LIBRARY'>('SURVEY');
   const [step, setStep] = useState<Step>('SETUP');
   const [isLoading, setIsLoading] = useState(false);
   
+  // Library State (Persisted)
+  const [savedPersonas, setSavedPersonas] = useState<GeneratedPersona[]>([]);
+  const [savedTemplates, setSavedTemplates] = useState<SavedTemplate[]>([]);
+  
+  // Template Modals State
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+  const [isLoadModalOpen, setIsLoadModalOpen] = useState(false);
+  const [templateNameInput, setTemplateNameInput] = useState("");
+
   // Step 1: Survey Data
   const [survey, setSurvey] = useState<Survey>({
     title: "New Product Concept Survey",
@@ -23,9 +33,14 @@ const App: React.FC = () => {
   // Step 2: Target Persona Data
   const [targetDef, setTargetDef] = useState<TargetPersonaDefinition>({
     description: "Remote workers and freelancers in the tech industry who manage multiple projects simultaneously.",
-    count: 5
+    count: 3
   });
-  const [generatedPersonas, setGeneratedPersonas] = useState<GeneratedPersona[]>([]);
+  // activeParticipants are the ones currently selected for the survey
+  const [activeParticipants, setActiveParticipants] = useState<GeneratedPersona[]>([]);
+  
+  // Edit Mode State
+  const [editingPersonaId, setEditingPersonaId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<GeneratedPersona | null>(null);
 
   // Step 3: Simulation Data
   const [responses, setResponses] = useState<SurveyResponse[]>([]);
@@ -33,13 +48,51 @@ const App: React.FC = () => {
 
   // Step 4: Results
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  
+  const reportRef = useRef<HTMLDivElement>(null);
+
+  // --- Effects ---
+  useEffect(() => {
+    const loadedPersonas = localStorage.getItem('personaPulse_library');
+    if (loadedPersonas) {
+      try {
+        setSavedPersonas(JSON.parse(loadedPersonas));
+      } catch (e) {
+        console.error("Failed to load persona library", e);
+      }
+    }
+
+    const loadedTemplates = localStorage.getItem('personaPulse_templates');
+    if (loadedTemplates) {
+      try {
+        setSavedTemplates(JSON.parse(loadedTemplates));
+      } catch (e) {
+        console.error("Failed to load survey templates", e);
+      }
+    }
+  }, []);
+
+  const savePersonaLibrary = (newList: GeneratedPersona[]) => {
+    setSavedPersonas(newList);
+    localStorage.setItem('personaPulse_library', JSON.stringify(newList));
+  };
+
+  const saveTemplatesToStorage = (newList: SavedTemplate[]) => {
+    setSavedTemplates(newList);
+    localStorage.setItem('personaPulse_templates', JSON.stringify(newList));
+  };
+
+  // --- Helpers ---
+  const generateId = () => {
+    return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+  };
 
   // --- Handlers ---
 
   // Survey Builder Handlers
   const addQuestion = (type: QuestionType) => {
     const newQ: Question = {
-      id: `q${Date.now()}`,
+      id: `q${generateId()}`,
       text: "",
       type,
       options: type === QuestionType.MULTIPLE_CHOICE ? ["Option 1", "Option 2"] : undefined
@@ -69,6 +122,54 @@ const App: React.FC = () => {
       })
     }));
   };
+  
+  const resetSurveyForm = () => {
+      if(window.confirm("Are you sure? This will clear all questions.")) {
+          setSurvey({
+              title: "Untitled Survey",
+              description: "",
+              questions: []
+          });
+      }
+  };
+
+  // Template Handlers
+  const openSaveTemplateModal = () => {
+      setTemplateNameInput(survey.title);
+      setIsSaveModalOpen(true);
+  };
+
+  const saveTemplate = () => {
+      if (!templateNameInput.trim()) {
+          alert("Please enter a name for the template.");
+          return;
+      }
+
+      const newTemplate: SavedTemplate = {
+          id: generateId(),
+          name: templateNameInput,
+          survey: JSON.parse(JSON.stringify(survey)), // Deep copy to ensure snapshot
+          createdAt: Date.now()
+      };
+      
+      saveTemplatesToStorage([...savedTemplates, newTemplate]);
+      setIsSaveModalOpen(false);
+  };
+
+  const loadTemplate = (template: SavedTemplate) => {
+      if (window.confirm(`Load template "${template.name}"? Current progress will be replaced.`)) {
+          // Deep copy when loading to avoid reference issues
+          const surveyCopy = JSON.parse(JSON.stringify(template.survey));
+          setSurvey(surveyCopy);
+          setIsLoadModalOpen(false);
+      }
+  };
+
+  const deleteTemplate = (id: string) => {
+      if (window.confirm("Delete this template permanently?")) {
+          saveTemplatesToStorage(savedTemplates.filter(t => t.id !== id));
+      }
+  };
 
   // Persona Generation Handler
   const handleGeneratePersonas = async () => {
@@ -76,7 +177,13 @@ const App: React.FC = () => {
     setIsLoading(true);
     try {
       const personas = await generatePersonas(targetDef.description, targetDef.count);
-      setGeneratedPersonas(personas);
+      // IMPORTANT: Ensure unique IDs here to prevent library collisions
+      const uniquePersonas = personas.map(p => ({
+          ...p,
+          id: generateId() // Overwrite AI generated ID with a unique timestamp-based ID
+      }));
+      
+      setActiveParticipants(prev => [...prev, ...uniquePersonas]);
     } catch (error) {
       console.error(error);
       alert("Failed to generate personas. Please check your API key or try again.");
@@ -85,17 +192,69 @@ const App: React.FC = () => {
     }
   };
 
+  // Library Handlers
+  const addToLibrary = (persona: GeneratedPersona) => {
+    // Since we use random IDs now, exact ID match is rare unless previously saved.
+    if (savedPersonas.some(p => p.id === persona.id)) {
+        alert("This specific persona instance is already in your library.");
+        return;
+    }
+    savePersonaLibrary([...savedPersonas, persona]);
+  };
+
+  const removeFromLibrary = (id: string) => {
+    savePersonaLibrary(savedPersonas.filter(p => p.id !== id));
+  };
+
+  const importFromLibrary = (persona: GeneratedPersona) => {
+      if (activeParticipants.some(p => p.id === persona.id)) return;
+      setActiveParticipants(prev => [...prev, persona]);
+  };
+
+  // Editing Handlers
+  const startEditing = (persona: GeneratedPersona) => {
+      setEditingPersonaId(persona.id);
+      setEditForm({...persona});
+  };
+
+  const saveEdit = (isLibrary: boolean) => {
+      if (!editForm) return;
+      
+      if (isLibrary) {
+          const updated = savedPersonas.map(p => p.id === editForm.id ? editForm : p);
+          savePersonaLibrary(updated);
+      } else {
+          // Updating active participant
+          setActiveParticipants(prev => prev.map(p => p.id === editForm.id ? editForm : p));
+      }
+      setEditingPersonaId(null);
+      setEditForm(null);
+  };
+
+  const cancelEdit = () => {
+      setEditingPersonaId(null);
+      setEditForm(null);
+  };
+
+  const deleteActivePersona = (id: string) => {
+      setActiveParticipants(prev => prev.filter(p => p.id !== id));
+  };
+
   // Simulation Handler
   const runSimulation = async () => {
+    if (activeParticipants.length === 0) {
+        alert("Please add at least one persona to run the simulation.");
+        return;
+    }
     setStep('SIMULATION');
     setResponses([]);
     setSimulationProgress(0);
     
     const newResponses: SurveyResponse[] = [];
     
-    // Process sequentially to visualize progress (and avoid potential rate limits for large batches)
-    for (let i = 0; i < generatedPersonas.length; i++) {
-      const persona = generatedPersonas[i];
+    // Process sequentially
+    for (let i = 0; i < activeParticipants.length; i++) {
+      const persona = activeParticipants[i];
       try {
         const resp = await simulateSurveyResponse(persona, survey);
         newResponses.push(resp);
@@ -103,14 +262,14 @@ const App: React.FC = () => {
       } catch (e) {
         console.error(`Error simulating ${persona.name}`);
       }
-      setSimulationProgress(((i + 1) / generatedPersonas.length) * 100);
+      setSimulationProgress(((i + 1) / activeParticipants.length) * 100);
     }
 
-    // Auto-analyze after simulation
+    // Auto-analyze
     if (newResponses.length > 0) {
         try {
-            setIsLoading(true); // Re-use loading for analysis phase visually if needed, though we are in SIMULATION step
-            const analysisResult = await analyzeResults(survey, newResponses, generatedPersonas);
+            setIsLoading(true);
+            const analysisResult = await analyzeResults(survey, newResponses, activeParticipants);
             setAnalysis(analysisResult);
             setStep('RESULTS');
         } catch(e) {
@@ -119,6 +278,9 @@ const App: React.FC = () => {
         } finally {
             setIsLoading(false);
         }
+    } else {
+        setStep('PERSONAS'); // Go back if no responses
+        setIsLoading(false);
     }
   };
 
@@ -136,7 +298,7 @@ const App: React.FC = () => {
 
     // Data Rows
     responses.forEach(r => {
-        const p = generatedPersonas.find(gp => gp.id === r.personaId);
+        const p = activeParticipants.find(gp => gp.id === r.personaId);
         if (!p) return;
 
         const row = [
@@ -197,10 +359,187 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
     window.URL.revokeObjectURL(url);
   };
 
+  const generatePDF = () => {
+      const element = reportRef.current;
+      if (!element) {
+          window.print();
+          return;
+      }
+      
+      // Check if html2pdf is available (loaded via script tag in index.html)
+      if ((window as any).html2pdf) {
+           const opt = {
+              margin:       10,
+              filename:     `${survey.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_report.pdf`,
+              image:        { type: 'jpeg', quality: 0.98 },
+              html2canvas:  { scale: 2 },
+              jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            };
+            (window as any).html2pdf().set(opt).from(element).save();
+      } else {
+          // Fallback
+          window.print();
+      }
+  };
+
   // --- Renderers ---
+
+  const renderPersonaCard = (p: GeneratedPersona, isLibrary: boolean, isEditing: boolean) => {
+      if (isEditing && editForm) {
+          return (
+              <div key={p.id} className="bg-white p-5 rounded-xl shadow-md border-2 border-indigo-500 animate-fadeIn">
+                  <div className="grid grid-cols-2 gap-4 mb-3">
+                      <div>
+                          <label className="text-xs text-gray-500">Name</label>
+                          <input type="text" className="w-full border p-1 rounded" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} />
+                      </div>
+                      <div>
+                          <label className="text-xs text-gray-500">Age</label>
+                          <input type="number" className="w-full border p-1 rounded" value={editForm.age} onChange={e => setEditForm({...editForm, age: parseInt(e.target.value)})} />
+                      </div>
+                  </div>
+                  <div className="mb-3">
+                       <label className="text-xs text-gray-500">Occupation</label>
+                       <input type="text" className="w-full border p-1 rounded" value={editForm.occupation} onChange={e => setEditForm({...editForm, occupation: e.target.value})} />
+                  </div>
+                  <div className="mb-3">
+                       <label className="text-xs text-gray-500">Traits</label>
+                       <textarea className="w-full border p-1 rounded text-sm" rows={2} value={editForm.traits} onChange={e => setEditForm({...editForm, traits: e.target.value})} />
+                  </div>
+                   <div className="mb-3">
+                       <label className="text-xs text-gray-500">Pain Points</label>
+                       <textarea className="w-full border p-1 rounded text-sm" rows={2} value={editForm.painPoints} onChange={e => setEditForm({...editForm, painPoints: e.target.value})} />
+                  </div>
+                  <div className="flex justify-end space-x-2 mt-2">
+                      <button onClick={cancelEdit} className="p-2 text-gray-500 hover:bg-gray-100 rounded"><X size={16} /></button>
+                      <button onClick={() => saveEdit(isLibrary)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded"><Check size={16} /></button>
+                  </div>
+              </div>
+          )
+      }
+
+      const isSaved = savedPersonas.some(saved => saved.id === p.id);
+
+      return (
+        <div key={p.id} className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex flex-col sm:flex-row gap-4 items-start relative group hover:shadow-md transition-all">
+            <div className="flex-shrink-0 w-12 h-12 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-full flex items-center justify-center text-white font-bold text-xl">
+                {p.name.charAt(0)}
+            </div>
+            <div className="flex-grow">
+                <div className="flex justify-between items-start">
+                    <div>
+                        <h4 className="font-bold text-gray-900 flex items-center">
+                            {p.name}, {p.age}
+                        </h4>
+                        <p className="text-sm text-gray-600 font-medium">{p.occupation}</p>
+                    </div>
+                </div>
+                <p className="text-sm text-gray-500 mt-2 italic">"{p.traits}"</p>
+                <div className="mt-3 text-xs bg-red-50 text-red-700 p-2 rounded border border-red-100">
+                    <span className="font-semibold">Pain Points:</span> {p.painPoints}
+                </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex flex-col space-y-2 sm:space-y-0 sm:flex-row sm:space-x-2 mt-2 sm:mt-0">
+                {!isLibrary && (
+                    <button 
+                        onClick={() => deleteActivePersona(p.id)}
+                        className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-red-50"
+                        title="Remove from survey"
+                    >
+                        <Trash2 size={16} />
+                    </button>
+                )}
+                 {isLibrary && (
+                    <button 
+                        onClick={() => removeFromLibrary(p.id)}
+                        className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-red-50"
+                        title="Delete from library"
+                    >
+                        <Trash2 size={16} />
+                    </button>
+                )}
+                <button 
+                    onClick={() => startEditing(p)}
+                    className="p-2 text-gray-400 hover:text-indigo-500 rounded-full hover:bg-indigo-50"
+                    title="Edit"
+                >
+                    <Edit2 size={16} />
+                </button>
+                {!isLibrary && !isSaved && (
+                     <button 
+                        onClick={() => addToLibrary(p)}
+                        className="p-2 text-gray-400 hover:text-green-600 rounded-full hover:bg-green-50"
+                        title="Save to Library"
+                    >
+                        <Save size={16} />
+                    </button>
+                )}
+                 {!isLibrary && isSaved && (
+                     <div className="p-2 text-green-600" title="Saved in Library">
+                        <CheckCircle size={16} />
+                     </div>
+                )}
+            </div>
+        </div>
+    );
+  }
+
+  const renderLibrary = () => (
+      <div className="max-w-5xl mx-auto space-y-8 animate-fadeIn">
+          <div className="flex justify-between items-end border-b pb-4">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Persona Library</h2>
+                <p className="text-gray-500">Manage your saved AI personas to reuse in future surveys.</p>
+              </div>
+              <div className="text-sm text-gray-400">
+                  {savedPersonas.length} saved
+              </div>
+          </div>
+
+          {savedPersonas.length === 0 ? (
+               <div className="text-center py-20 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
+                    <Users size={48} className="text-gray-300 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-gray-900">Library is Empty</h3>
+                    <p className="text-gray-500">Generate personas in a survey and click the save icon to store them here.</p>
+               </div>
+          ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {savedPersonas.map(p => renderPersonaCard(p, true, editingPersonaId === p.id))}
+              </div>
+          )}
+      </div>
+  );
 
   const renderSurveyBuilder = () => (
     <div className="space-y-8 max-w-4xl mx-auto">
+      {/* Template Toolbar */}
+      <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+         <div className="flex items-center gap-2">
+             <button 
+                onClick={() => setIsLoadModalOpen(true)}
+                className="flex items-center px-3 py-1.5 bg-white text-indigo-600 text-xs font-medium border border-indigo-200 rounded hover:bg-indigo-50 transition"
+             >
+                 <FolderOpen size={14} className="mr-1.5" /> Load Template
+             </button>
+         </div>
+         <div className="flex gap-2">
+             <button 
+                onClick={openSaveTemplateModal}
+                className="flex items-center px-3 py-1.5 bg-white text-indigo-600 text-xs font-medium border border-indigo-200 rounded hover:bg-indigo-50"
+             >
+                 <Save size={14} className="mr-1.5" /> Save Template
+             </button>
+             <button 
+                onClick={resetSurveyForm}
+                className="flex items-center px-3 py-1.5 bg-white text-gray-600 text-xs font-medium border border-gray-200 rounded hover:bg-red-50 hover:text-red-600"
+             >
+                 <RotateCcw size={14} className="mr-1.5" /> Reset Form
+             </button>
+         </div>
+      </div>
+
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Survey Details</h2>
         <div className="space-y-4">
@@ -325,32 +664,36 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
   );
 
   const renderPersonaBuilder = () => (
-    <div className="max-w-4xl mx-auto space-y-8">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        {/* Left: Definition */}
-        <div className="md:col-span-1 space-y-6">
+    <div className="max-w-6xl mx-auto space-y-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Left Column: Add Participants */}
+        <div className="lg:col-span-1 space-y-6">
+            
+            {/* Generator Card */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Target Audience</h2>
+                <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <User className="mr-2 text-indigo-600" size={20}/> Generate New
+                </h2>
                 <div className="space-y-4">
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Who is this for?</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Target Description</label>
                         <textarea
-                            className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 h-40 text-sm"
-                            placeholder="E.g., College students in the US who love hiking and are budget-conscious..."
+                            className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 h-32 text-sm"
+                            placeholder="E.g., Urban coffee lovers..."
                             value={targetDef.description}
                             onChange={(e) => setTargetDef(prev => ({...prev, description: e.target.value}))}
                         />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Sample Size</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Count</label>
                         <select 
                             className="w-full p-2 border border-gray-300 rounded-md"
                             value={targetDef.count}
                             onChange={(e) => setTargetDef(prev => ({...prev, count: parseInt(e.target.value)}))}
                         >
-                            <option value={3}>3 Personas (Fast)</option>
-                            <option value={5}>5 Personas (Balanced)</option>
-                            <option value={10}>10 Personas (Thorough)</option>
+                            <option value={1}>1 Persona</option>
+                            <option value={3}>3 Personas</option>
+                            <option value={5}>5 Personas</option>
                         </select>
                     </div>
                     <button
@@ -358,55 +701,72 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
                         disabled={isLoading}
                         className="w-full py-3 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 transition font-medium flex justify-center items-center disabled:opacity-50"
                     >
-                        {isLoading ? <Loader2 className="animate-spin mr-2" /> : <User className="mr-2" />}
-                        {isLoading ? 'Generating...' : 'Generate Personas'}
+                        {isLoading ? <Loader2 className="animate-spin mr-2" /> : <Plus className="mr-2" />}
+                        {isLoading ? 'Generating...' : 'Generate & Add'}
                     </button>
                 </div>
             </div>
+
+            {/* Library Loader Card */}
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <FolderOpen className="mr-2 text-yellow-600" size={20}/> Load from Library
+                </h2>
+                {savedPersonas.length === 0 ? (
+                    <p className="text-sm text-gray-500">No saved personas found. Save generated personas to reuse them here.</p>
+                ) : (
+                    <div className="space-y-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+                        {savedPersonas.map(p => {
+                            const isAdded = activeParticipants.some(ap => ap.id === p.id);
+                            return (
+                                <div key={p.id} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200 text-sm">
+                                    <div className="truncate pr-2">
+                                        <span className="font-bold block truncate">{p.name}</span>
+                                        <span className="text-gray-500 text-xs truncate">{p.occupation}</span>
+                                    </div>
+                                    <button 
+                                        onClick={() => importFromLibrary(p)}
+                                        disabled={isAdded}
+                                        className={`p-1.5 rounded transition ${isAdded ? 'text-gray-400 bg-gray-200 cursor-default' : 'bg-white border hover:bg-green-50 text-green-600'}`}
+                                    >
+                                        {isAdded ? <Check size={14} /> : <Plus size={14} />}
+                                    </button>
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+            </div>
+
         </div>
 
-        {/* Right: Generated List */}
-        <div className="md:col-span-2">
-            {generatedPersonas.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center bg-gray-50 rounded-xl border-2 border-dashed border-gray-200 p-12 text-center">
-                    <User size={48} className="text-gray-300 mb-4" />
-                    <h3 className="text-lg font-medium text-gray-900">No Personas Yet</h3>
-                    <p className="text-gray-500 max-w-sm mt-2">Define your target audience and click generate to create synthetic AI participants for your survey.</p>
+        {/* Right Column: Active Participants List */}
+        <div className="lg:col-span-2">
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                    Participants ({activeParticipants.length})
+                </h3>
+                {activeParticipants.length > 0 && (
+                    <button 
+                        onClick={runSimulation}
+                        className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow flex items-center font-medium transition animate-pulse-subtle"
+                    >
+                        <Play size={16} className="mr-2" /> Run Simulation
+                    </button>
+                )}
+            </div>
+            
+            {activeParticipants.length === 0 ? (
+                <div className="h-64 flex flex-col items-center justify-center bg-gray-50 rounded-xl border-2 border-dashed border-gray-200 p-8 text-center">
+                    <Users size={48} className="text-gray-300 mb-4" />
+                    <h3 className="text-lg font-medium text-gray-900">No Participants Added</h3>
+                    <p className="text-gray-500 max-w-sm mt-2">
+                        Generate new personas or load saved ones from your library to start the survey.
+                    </p>
                 </div>
             ) : (
-                <div className="space-y-4">
-                    <div className="flex justify-between items-center mb-2">
-                        <h3 className="text-lg font-semibold text-gray-900">Generated Participants ({generatedPersonas.length})</h3>
-                        {generatedPersonas.length > 0 && (
-                            <button 
-                                onClick={runSimulation}
-                                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow flex items-center font-medium transition"
-                            >
-                                <Play size={16} className="mr-2" /> Run Simulation
-                            </button>
-                        )}
-                    </div>
-                    <div className="grid grid-cols-1 gap-4">
-                        {generatedPersonas.map(p => (
-                            <div key={p.id} className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex flex-col sm:flex-row gap-4 items-start">
-                                <div className="flex-shrink-0 w-12 h-12 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-full flex items-center justify-center text-white font-bold text-xl">
-                                    {p.name.charAt(0)}
-                                </div>
-                                <div className="flex-grow">
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <h4 className="font-bold text-gray-900">{p.name}, {p.age}</h4>
-                                            <p className="text-sm text-gray-600 font-medium">{p.occupation}</p>
-                                        </div>
-                                    </div>
-                                    <p className="text-sm text-gray-500 mt-2 italic">"{p.traits}"</p>
-                                    <div className="mt-3 text-xs bg-red-50 text-red-700 p-2 rounded border border-red-100">
-                                        <span className="font-semibold">Pain Points:</span> {p.painPoints}
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                <div className="grid grid-cols-1 gap-4">
+                    {activeParticipants.map(p => renderPersonaCard(p, false, editingPersonaId === p.id))}
                 </div>
             )}
         </div>
@@ -440,7 +800,7 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
 
             <div className="mt-8 grid gap-3">
                 {responses.map((r, idx) => {
-                    const p = generatedPersonas.find(gp => gp.id === r.personaId);
+                    const p = activeParticipants.find(gp => gp.id === r.personaId);
                     return (
                         <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200 animate-fadeIn">
                             <div className="flex items-center">
@@ -451,7 +811,7 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
                         </div>
                     )
                 })}
-                {responses.length < generatedPersonas.length && (
+                {responses.length < activeParticipants.length && (
                     <div className="flex items-center justify-center p-3 text-gray-400 animate-pulse">
                         <Loader2 className="animate-spin mr-2" size={16} />
                         <span className="text-sm">Interviewing next participant...</span>
@@ -466,7 +826,7 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
       if (!analysis) return <div className="text-center">Loading analysis...</div>;
 
       return (
-          <div className="max-w-5xl mx-auto space-y-8 print:space-y-4">
+          <div className="max-w-5xl mx-auto space-y-8 print:space-y-4" ref={reportRef} id="report-content">
               {/* Export Actions */}
               <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 no-print">
                   <div>
@@ -478,19 +838,19 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
                         onClick={downloadCSV}
                         className="flex items-center px-3 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm font-medium"
                       >
-                          <FileSpreadsheet size={16} className="mr-2 text-green-600" /> Data (CSV)
+                          <FileSpreadsheet size={16} className="mr-2 text-green-600" /> CSV
                       </button>
                       <button 
                         onClick={downloadTXT}
                         className="flex items-center px-3 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm font-medium"
                       >
-                          <FileText size={16} className="mr-2 text-blue-600" /> Report (TXT)
+                          <FileText size={16} className="mr-2 text-blue-600" /> TXT
                       </button>
                       <button 
-                        onClick={() => window.print()}
+                        onClick={generatePDF}
                         className="flex items-center px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium"
                       >
-                          <Printer size={16} className="mr-2" /> Print / PDF
+                          <Download size={16} className="mr-2" /> PDF Download
                       </button>
                   </div>
               </div>
@@ -605,12 +965,14 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
                     onClick={() => {
                         setStep('SETUP');
                         setResponses([]);
-                        setGeneratedPersonas([]);
                         setAnalysis(null);
+                        // Intentionally NOT clearing activeParticipants or survey questions
+                        // to allow easy iteration.
+                        alert("Ready for a new run! Your survey questions and participants are preserved.");
                     }}
                     className="px-6 py-3 bg-white border border-gray-300 text-gray-700 rounded-lg shadow-sm hover:bg-gray-50 transition font-medium"
                   >
-                      Start New Survey
+                      Start New Survey (Reset Results)
                   </button>
               </div>
           </div>
@@ -618,7 +980,7 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
+    <div className="min-h-screen bg-gray-50 font-sans text-gray-900 relative">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10 no-print">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -626,26 +988,136 @@ ${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
             <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
                 <BarChart2 className="text-white" size={20} />
             </div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">PersonaPulse AI</h1>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight hidden sm:block">PersonaPulse AI</h1>
           </div>
-          <div className="text-sm text-gray-500">
-              Simulated Market Research
+          
+          <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
+             <button
+                onClick={() => setActiveTab('SURVEY')}
+                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+                    activeTab === 'SURVEY' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+             >
+                 Survey
+             </button>
+             <button
+                onClick={() => setActiveTab('LIBRARY')}
+                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center ${
+                    activeTab === 'LIBRARY' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+             >
+                 <Users size={14} className="mr-1.5" /> Library
+             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
-        <div className="no-print">
-            <StepIndicator currentStep={step} />
-        </div>
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12 pt-8">
+        
+        {activeTab === 'SURVEY' ? (
+            <div className="animate-fadeIn">
+                <div className="no-print mb-8">
+                    <StepIndicator currentStep={step} />
+                </div>
 
-        <div className="animate-fadeIn">
-          {step === 'SETUP' && renderSurveyBuilder()}
-          {step === 'PERSONAS' && renderPersonaBuilder()}
-          {step === 'SIMULATION' && renderSimulation()}
-          {step === 'RESULTS' && renderResults()}
-        </div>
+                {step === 'SETUP' && renderSurveyBuilder()}
+                {step === 'PERSONAS' && renderPersonaBuilder()}
+                {step === 'SIMULATION' && renderSimulation()}
+                {step === 'RESULTS' && renderResults()}
+            </div>
+        ) : (
+            renderLibrary()
+        )}
+
       </main>
+
+      {/* Save Template Modal */}
+      {isSaveModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 animate-fadeIn">
+            <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-md transform transition-all">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Save Survey Template</h3>
+                    <button onClick={() => setIsSaveModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+                        <X size={20} />
+                    </button>
+                </div>
+                <p className="text-sm text-gray-500 mb-4">Give your survey a memorable name to reuse it later.</p>
+                <input 
+                    type="text" 
+                    className="w-full border border-gray-300 p-2 rounded-lg mb-6 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    value={templateNameInput}
+                    onChange={e => setTemplateNameInput(e.target.value)}
+                    placeholder="E.g. Product Concept Validation"
+                    autoFocus
+                />
+                <div className="flex justify-end space-x-2">
+                    <button 
+                        onClick={() => setIsSaveModalOpen(false)} 
+                        className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={saveTemplate} 
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium shadow-sm"
+                    >
+                        Save Template
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* Load Template Modal */}
+      {isLoadModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 animate-fadeIn">
+            <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-2xl transform transition-all max-h-[80vh] flex flex-col">
+                <div className="flex justify-between items-center mb-4 flex-shrink-0">
+                    <h3 className="text-lg font-bold text-gray-900">Load Survey Template</h3>
+                    <button onClick={() => setIsLoadModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+                        <X size={20} />
+                    </button>
+                </div>
+                
+                {savedTemplates.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                        <LayoutList size={48} className="mb-4 text-gray-300" />
+                        <p className="text-lg font-medium">No templates saved yet.</p>
+                        <p className="text-sm">Create a survey and click "Save Template" to see it here.</p>
+                    </div>
+                ) : (
+                    <div className="overflow-y-auto flex-grow pr-2 custom-scrollbar space-y-3">
+                        {savedTemplates.map(t => (
+                            <div key={t.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200 hover:border-indigo-300 transition-colors">
+                                <div>
+                                    <h4 className="font-bold text-gray-900 text-lg">{t.name}</h4>
+                                    <div className="flex items-center text-xs text-gray-500 mt-1 space-x-3">
+                                        <span className="flex items-center"><Calendar size={12} className="mr-1"/> {new Date(t.createdAt).toLocaleDateString()}</span>
+                                        <span className="flex items-center"><LayoutList size={12} className="mr-1"/> {t.survey.questions.length} Questions</span>
+                                    </div>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <button 
+                                        onClick={() => deleteTemplate(t.id)}
+                                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition"
+                                        title="Delete Template"
+                                    >
+                                        <Trash2 size={18} />
+                                    </button>
+                                    <button 
+                                        onClick={() => loadTemplate(t)}
+                                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium shadow-sm text-sm flex items-center"
+                                    >
+                                        Load <ChevronRight size={16} className="ml-1" />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+      )}
     </div>
   );
 };

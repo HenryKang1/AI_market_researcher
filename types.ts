@@ -17,6 +17,13 @@ export interface Survey {
   questions: Question[];
 }
 
+export interface SavedTemplate {
+  id: string;
+  name: string;
+  survey: Survey;
+  createdAt: number;
+}
+
 export interface TargetPersonaDefinition {
   description: string; // e.g., "Busy moms in their 30s interested in fitness"
   count: number; // Number of personas to generate
