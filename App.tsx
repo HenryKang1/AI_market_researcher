@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { Plus, Trash2, User, Play, FileText, BarChart2, CheckCircle, Loader2, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, User, Play, FileText, BarChart2, CheckCircle, Loader2, ChevronRight, Download, Printer, FileSpreadsheet } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { StepIndicator } from './components/StepIndicator';
 import { Survey, Question, QuestionType, TargetPersonaDefinition, GeneratedPersona, SurveyResponse, Step, AnalysisResult } from './types';
@@ -120,6 +120,81 @@ const App: React.FC = () => {
             setIsLoading(false);
         }
     }
+  };
+
+  // Export Handlers
+  const downloadCSV = () => {
+    const escapeCsv = (text: any) => {
+        if (text === null || text === undefined) return "";
+        const stringText = String(text);
+        return `"${stringText.replace(/"/g, '""')}"`;
+    };
+
+    // Headers
+    const headers = ['Persona ID', 'Name', 'Age', 'Occupation', 'Traits', ...survey.questions.map(q => escapeCsv(q.text))];
+    const csvRows = [headers.join(',')];
+
+    // Data Rows
+    responses.forEach(r => {
+        const p = generatedPersonas.find(gp => gp.id === r.personaId);
+        if (!p) return;
+
+        const row = [
+            escapeCsv(p.id),
+            escapeCsv(p.name),
+            p.age,
+            escapeCsv(p.occupation),
+            escapeCsv(p.traits),
+            ...survey.questions.map(q => {
+                const ans = r.answers.find(a => a.questionId === q.id)?.answer;
+                return escapeCsv(ans);
+            })
+        ];
+        csvRows.push(row.join(','));
+    });
+
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${survey.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_data.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const downloadTXT = () => {
+    if (!analysis) return;
+    const content = `
+SURVEY REPORT
+============================================
+Title: ${survey.title}
+Date: ${new Date().toLocaleDateString()}
+Description: ${survey.description}
+
+OVERALL SENTIMENT
+--------------------------------------------
+${analysis.sentiment}
+
+EXECUTIVE SUMMARY
+--------------------------------------------
+${analysis.summary}
+
+KEY INSIGHTS
+--------------------------------------------
+${analysis.keyInsights.map(i => `- ${i}`).join('\n')}
+
+ACTIONABLE SUGGESTIONS
+--------------------------------------------
+${analysis.featureSuggestions.map(s => `- ${s}`).join('\n')}
+    `.trim();
+
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${survey.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_report.txt`;
+    a.click();
+    window.URL.revokeObjectURL(url);
   };
 
   // --- Renderers ---
@@ -391,9 +466,37 @@ const App: React.FC = () => {
       if (!analysis) return <div className="text-center">Loading analysis...</div>;
 
       return (
-          <div className="max-w-5xl mx-auto space-y-8">
+          <div className="max-w-5xl mx-auto space-y-8 print:space-y-4">
+              {/* Export Actions */}
+              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 no-print">
+                  <div>
+                      <h3 className="text-lg font-bold text-gray-900">Analysis Complete</h3>
+                      <p className="text-sm text-gray-500">Review the insights below or export for your team.</p>
+                  </div>
+                  <div className="flex gap-3">
+                      <button 
+                        onClick={downloadCSV}
+                        className="flex items-center px-3 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm font-medium"
+                      >
+                          <FileSpreadsheet size={16} className="mr-2 text-green-600" /> Data (CSV)
+                      </button>
+                      <button 
+                        onClick={downloadTXT}
+                        className="flex items-center px-3 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm font-medium"
+                      >
+                          <FileText size={16} className="mr-2 text-blue-600" /> Report (TXT)
+                      </button>
+                      <button 
+                        onClick={() => window.print()}
+                        className="flex items-center px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium"
+                      >
+                          <Printer size={16} className="mr-2" /> Print / PDF
+                      </button>
+                  </div>
+              </div>
+
               {/* Top Summary Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print-break-inside-avoid">
                   <div className={`p-6 rounded-xl border shadow-sm ${
                       analysis.sentiment === 'Positive' ? 'bg-green-50 border-green-200' : 
                       analysis.sentiment === 'Negative' ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'
@@ -412,7 +515,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Quantitative Charts */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 print:grid-cols-2">
                   {survey.questions.filter(q => q.type !== QuestionType.OPEN_ENDED).map((q, idx) => {
                       // Prepare chart data
                       const dataMap: Record<string, number> = {};
@@ -435,7 +538,7 @@ const App: React.FC = () => {
                       const chartData = Object.keys(dataMap).map(k => ({ name: k, count: dataMap[k] }));
 
                       return (
-                          <div key={q.id} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                          <div key={q.id} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm print-break-inside-avoid">
                               <h4 className="font-bold text-gray-900 mb-4">{q.text}</h4>
                               <div className="h-64">
                                   <ResponsiveContainer width="100%" height="100%">
@@ -461,7 +564,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Qualitative Insights */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 print-break-inside-avoid">
                   <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
                       <div className="flex items-center mb-4">
                           <div className="bg-yellow-100 p-2 rounded-lg mr-3">
@@ -497,7 +600,7 @@ const App: React.FC = () => {
                   </div>
               </div>
               
-               <div className="flex justify-center pt-8 pb-12">
+               <div className="flex justify-center pt-8 pb-12 no-print">
                   <button
                     onClick={() => {
                         setStep('SETUP');
@@ -517,7 +620,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-10 no-print">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
@@ -532,7 +635,9 @@ const App: React.FC = () => {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
-        <StepIndicator currentStep={step} />
+        <div className="no-print">
+            <StepIndicator currentStep={step} />
+        </div>
 
         <div className="animate-fadeIn">
           {step === 'SETUP' && renderSurveyBuilder()}

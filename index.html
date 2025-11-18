@@ -11,6 +11,12 @@
         font-family: 'Inter', sans-serif;
         background-color: #f8fafc;
       }
+      @media print {
+        .no-print { display: none !important; }
+        body { background-color: white; -webkit-print-color-adjust: exact; }
+        .print-break-inside-avoid { break-inside: avoid; }
+        .shadow-sm, .shadow-lg, .shadow { box-shadow: none !important; border: 1px solid #e5e7eb !important; }
+      }
     </style>
   <script type="importmap">
 {
