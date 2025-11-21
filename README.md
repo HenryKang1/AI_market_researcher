@@ -1,7 +1,3 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
 # Run and deploy your AI Studio app
 
 This contains everything you need to run your app locally.
@@ -20,4 +16,7 @@ Open the Cursor or terminal.
 4. Run the app: Type this below in the terminal
    `npm run dev`
 
-
+If you are interesting to build the startup in the USA please visit. We are looking for someone help each other.
+https://www.ustechlab.com/
+You can donate here if you like.
+buymeacoffee.com/ustechlab
