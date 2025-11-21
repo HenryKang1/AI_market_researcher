@@ -17,6 +17,7 @@ Open the Cursor or terminal.
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 2.1 For the free API key
    https://aistudio.google.com/apikey Setup your first time google cloud and get the 300 credit.
-4. Run the app:
+4. Run the app: Type this below in the terminal
    `npm run dev`
+
 
