@@ -16,7 +16,9 @@ Open the Cursor or terminal.
 4. Run the app: Type this below in the terminal
    `npm run dev`
 
-If you are interesting to build the startup in the USA please visit. We are looking for someone help each other.
+
+If you are interesting to build the startup in the USA or help startup. We are looking for someone help each other.
 https://www.ustechlab.com/
+
 You can donate here if you like.
-buymeacoffee.com/ustechlab
+https://buymeacoffee.com/ustechlab/
