@@ -20,9 +20,6 @@ Open the Cursor or terminal.
 If you are interesting to build the startup in the USA or help startup. We are looking for someone help each other.
 https://www.ustechlab.com/
 
-You can donate here if you like.
-https://buymeacoffee.com/ustechlab/
-
 
 
 This contains everything you need to run your app locally.
